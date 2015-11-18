@@ -1,6 +1,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "reg.h"
+#include <string.h>
+#include <stdlib.h>
 #include "threads.h"
 
 /* USART TXE Flag
@@ -8,6 +10,10 @@
  * set when that data is transferred to the TDR
  */
 #define USART_FLAG_TXE	((uint16_t) 0x0080)
+
+#define USART_FLAG_RXNE ((uint16_t) 0x0020)
+
+extern int fibonacci(int x);
 
 void usart_init(void)
 {
@@ -36,6 +42,38 @@ void print_str(const char *str)
 	}
 }
 
+void print_char(const char *str)
+{
+	if(*str){
+		while (!(*(USART2_SR) & USART_FLAG_TXE));
+		*(USART2_DR) = (*str & 0xFF);
+	}
+}
+
+char *itoa(uint32_t val)
+{
+	static char buf[33]= {0};
+	buf[9] = '\0';
+	char *index = buf + 32;
+	
+	do
+	{
+		*(--index) = (val%10) + '0';
+		val /= 10;
+	}
+	while( val > 0 );
+
+	return index;
+}
+
+char scan_char()
+{
+	while (1) {
+		while (!(*(USART2_SR) & USART_FLAG_RXNE));
+		return ((*USART2_DR) & 0xFF);
+	}
+}
+
 static void delay(volatile int count)
 {
 	count *= 50000;
@@ -48,6 +86,66 @@ static void busy_loop(void *str)
 		print_str(str);
 		print_str(": Running...\n");
 		delay(1000);
+	}
+}
+
+void fib(void *in)
+{
+	int x = (int) in;
+	uint32_t val = fibonacci(x);
+	print_str("Fibonacci (");
+	print_str(itoa(x));
+	print_str(") is ");
+	print_str(itoa(val));
+	print_str("\n");
+
+}
+
+void decode(char *input)
+{
+	char *tok = strtok(input," ");
+
+	if(tok[0] == 'f' && tok[1] == 'i' && tok[2] == 'b' && tok[3] == '\0'){
+		
+		tok = strtok(NULL," ");
+		int val = atoi(tok);
+		//const int val = 10;
+		fib((void *) val);
+		while(tok != NULL)
+			tok = strtok(NULL," ");
+	} else {
+		print_str("Function is not found...\n");
+	}
+}
+
+void shell()
+{
+	char buf[128];
+	int index;
+	while(1){
+		print_str("embedded@embedded-PC$");
+		index = 0;
+		while(1){
+			buf[index] = scan_char();
+			buf[(index+1)] = '\0';
+			
+			if( buf[index] == 13 || buf[index] == '\n' ){
+				print_char("\n");
+				decode(buf);
+				break;
+			}
+			else if(buf[index] == 8 || buf[index] == 127){
+				if(index > 0){
+					buf[index] = '\0';
+					index--;
+					print_str("\b \b");
+				}
+			}
+			else{
+				print_char(&buf[index]);
+				index++;
+			}
+		}
 	}
 }
 
@@ -74,18 +172,10 @@ void test3(void *userdata)
 
 int main(void)
 {
-	const char *str1 = "Task1", *str2 = "Task2", *str3 = "Task3";
-
 	usart_init();
 
-	if (thread_create(test1, (void *) str1) == -1)
-		print_str("Thread 1 creation failed\r\n");
-
-	if (thread_create(test2, (void *) str2) == -1)
-		print_str("Thread 2 creation failed\r\n");
-
-	if (thread_create(test3, (void *) str3) == -1)
-		print_str("Thread 3 creation failed\r\n");
+	if (thread_create(shell, (void *) NULL) == -1)
+		print_str("Shell creation failed\r\n");
 
 	/* SysTick configuration */
 	*SYSTICK_LOAD = (CPU_CLOCK_HZ / TICK_RATE_HZ) - 1UL;
